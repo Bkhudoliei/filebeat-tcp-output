@@ -10,7 +10,6 @@ import (
 	"github.com/elastic/beats/libbeat/outputs/codec"
 	"github.com/elastic/beats/libbeat/publisher"
 	"net"
-	"crypto/x509"
 )
 
 func init() {
@@ -19,12 +18,12 @@ func init() {
 
 type tcpOutput struct {
 	connection    net.Conn
-	connectionTLS    *tls.Conn
-	address string
+	connectionTLS *tls.Conn
+	address       string
 	beat          beat.Info
 	observer      outputs.Observer
 	codec         codec.Codec
-	usessl bool
+	usessl        bool
 }
 
 // makeUdpout instantiates a new file output instance.
@@ -100,7 +99,7 @@ func (out *tcpOutput) init(beat beat.Info, c tcpoutConfig) error {
 // Implement Outputer
 func (out *tcpOutput) Close() error {
 	if out.usessl {
-		return  out.connectionTLS.Close()
+		return out.connectionTLS.Close()
 	} else {
 		return out.connection.Close()
 	}
