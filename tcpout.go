@@ -10,6 +10,7 @@ import (
 	"github.com/elastic/beats/libbeat/outputs/codec"
 	"github.com/elastic/beats/libbeat/publisher"
 	"net"
+	//	"time"
 )
 
 func init() {
@@ -24,6 +25,7 @@ type tcpOutput struct {
 	observer      outputs.Observer
 	codec         codec.Codec
 	usessl        bool
+	sslconfig     *tls.Config
 }
 
 // makeUdpout instantiates a new file output instance.
@@ -60,35 +62,18 @@ func (out *tcpOutput) init(beat beat.Info, c tcpoutConfig) error {
 	out.usessl = c.UseSSL
 	out.address = address
 	var err error
-	//var cert Certificate
 	if c.UseSSL {
 		cert, err := tls.LoadX509KeyPair(c.SSLCert, c.SSLKey)
 		if err != nil {
 			return err
 		}
-		//server, err := net.ResolveTCPAddr("tcp4", address)
-		//if err != nil {
-		//	return err
-		//}
-		config := tls.Config{Certificates: []tls.Certificate{cert}, InsecureSkipVerify: true}
-		conn, err := tls.Dial("tcp4", address, &config)
-		if err != nil {
-			return err
-		}
-		out.connectionTLS = conn
-	} else {
-		conn, err := net.Dial("tcp4", address)
-		if err != nil {
-			return err
-		}
-		out.connection = conn
+		out.sslconfig = &tls.Config{Certificates: []tls.Certificate{cert}, InsecureSkipVerify: true}
 	}
+
 	out.codec, err = codec.CreateEncoder(beat, c.Codec)
 	if err != nil {
 		return err
 	}
-
-	//out.remoteAddress = server
 
 	logp.Info("Initialized tcp output. "+
 		"Server address=%v", address)
@@ -109,11 +94,25 @@ func (out *tcpOutput) Publish(
 	batch publisher.Batch,
 ) error {
 	defer batch.ACK()
-
+	var err error
+	//Create connection every batch
+	if out.usessl {
+		out.connectionTLS, err = tls.Dial("tcp4", out.address, out.sslconfig)
+		if err != nil {
+			return err
+		}
+	} else {
+		out.connection, err = net.Dial("tcp4", out.address)
+		if err != nil {
+			return err
+		}
+	}
+	defer out.Close()
 	st := out.observer
 	events := batch.Events()
 	st.NewBatch(len(events))
 
+	bulkSize := 0
 	dropped := 0
 	for i := range events {
 		event := &events[i]
@@ -130,9 +129,9 @@ func (out *tcpOutput) Publish(
 			continue
 		}
 		if out.usessl {
-			_, err = out.connectionTLS.Write([]byte(serializedEvent))
+			_, err = out.connectionTLS.Write([]byte(string(serializedEvent) + "\n"))
 		} else {
-			_, err = out.connection.Write([]byte(serializedEvent))
+			_, err = out.connection.Write([]byte(string(serializedEvent) + "\n"))
 		}
 		if err != nil {
 			st.WriteError(err)
@@ -144,13 +143,13 @@ func (out *tcpOutput) Publish(
 			dropped++
 			continue
 		}
-
+		bulkSize += len(serializedEvent) + 1
 		st.WriteBytes(len(serializedEvent) + 1)
 	}
 
 	st.Dropped(dropped)
 	st.Acked(len(events) - dropped)
-
+	logp.Warn("Processed events: %v. Dropped events: %v. Bulk size: %v", len(events)-dropped, dropped, bulkSize)
 	return nil
 }
 
